@@ -1,7 +1,16 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'domain.dart';
+import 'firebase_options.dart';
 
-void main() {
-  runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.android,
+  );
+  runApp(MyApp());
 }
 
 class MyApp extends StatelessWidget {
@@ -30,15 +39,26 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  final _items = <Item>[];
+  final storage = FirebaseStorage.instance;
+  late CollectionReference<Item> _items;
   final _nameController = TextEditingController();
   bool _purchasedController = false;
 
   @override
   void initState() {
     super.initState();
-    _items.add(Item(name: 'Йогрут', purchased: true));
-    _items.add(Item(name: 'Мороженое', purchased: false));
+    _items = FirebaseFirestore.instance.collection('items').withConverter<Item>(
+          fromFirestore: (snapshot, _) => Item.fromJson(snapshot.data()!),
+          toFirestore: (item, _) => item.toJson(),
+        );
+  }
+
+  Future<void> updateItem({required String docID, required bool purchased}) {
+    return _items
+        .doc(docID)
+        .update({'purchased': purchased})
+        .then((value) => print("Item updated"))
+        .catchError((error) => print("Failed to update item: $error"));
   }
 
   void _submit() {
@@ -50,27 +70,43 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return SafeArea(
+      child: Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
       ),
-      body: SafeArea(
-          child: Column(
+      body: Column(
         children: [
           Expanded(
-              child: ListView(
-            children: _items
-                .map(
-                  (e) => CheckboxListTile(
-                    title: Text(e.name),
-                    value: e.purchased,
-                    onChanged: (value) {
-                      setState(() => e.purchased = value!);
-                    },
-                  ),
-                )
-                .toList(),
-          )),
+            child: StreamBuilder<List<Item>>(
+                stream: _items
+                    .snapshots()
+                    .map((e) => e.docs.map((e) => e.data()).toList()),
+                builder: (context, snapshot) => ListView(
+                      children: snapshot.hasData
+                          ? snapshot.data!
+                              .map((e) => CheckboxListTile(
+                                    title: Text(e.name),
+                                    value: e.purchased,
+                                    onChanged: (value) {
+                                      var newValue = value!;
+                                      FirebaseFirestore.instance
+                                          .collection('items')
+                                          .where('name', isEqualTo: e.name)
+                                          .get()
+                                          .then(
+                                        (value) {
+                                          updateItem(
+                                              docID: value.docs.single.id,
+                                              purchased: newValue);
+                                        },
+                                      );
+                                    },
+                                  ))
+                              .toList()
+                          : [],
+                    )),
+          ),
           SizedBox(
             height: 100,
             child: Row(children: [
@@ -99,11 +135,4 @@ class _MyHomePageState extends State<MyHomePage> {
       )),
     );
   }
-}
-
-class Item {
-  final String name;
-  late bool purchased;
-
-  Item({this.name = '', this.purchased = false});
 }
